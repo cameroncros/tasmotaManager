@@ -9,13 +9,15 @@ from urllib.parse import urlencode
 
 import aiohttp as aiohttp
 import requests
-from aiohttp import FormData
 
 
 class Device:
     def __init__(self, address, data):
-        self.address = address
+        self.address = str(address)
         self.data = data
+
+    def __eq__(self, other):
+        return self.address == other.address
 
     async def send_command(self, command: str) -> Tuple[str, Any]:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(5)) as session:
@@ -151,7 +153,7 @@ async def main():
         for device in new_devices:
             if device is None:
                 continue
-            if device.address not in devices:
+            if device not in devices:
                 devices.append(device)
         save_devices(args.config, devices)
 
