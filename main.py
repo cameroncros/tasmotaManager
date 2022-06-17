@@ -106,7 +106,7 @@ def save_devices(config_file: str, devices: List[Device]):
         json.dump(config, f, ensure_ascii=False, indent=4)
 
 
-async def repl(devices: List[Device]):
+async def console(devices: List[Device]):
     while True:
         command = input('> ')
         results = []
@@ -140,12 +140,14 @@ async def main():
     parser.add_argument("--scan", help="Scan a network to look for tasmota devices on.", required=False)
     parser.add_argument("--config", help="The config to look up tasmota devices.", required=False,
                         default="devices.json")
-    parser.add_argument("--repl", help="Run a console", required=False, action='store_true')
+    parser.add_argument("--console", help="Run a console", required=False, action='store_true')
     parser.add_argument("--backup", help="Backup devices", required=False, action='store_true')
     parser.add_argument("--restore", help="Restore devices", required=False, action='store_true')
     args = parser.parse_args()
 
     devices = load_devices(args.config)
+    for device in devices:
+        print(f'Loaded device: {device.address}')
 
     if args.scan:
         print(f'Scanning: {args.scan}')
@@ -164,8 +166,8 @@ async def main():
     if args.restore:
         await restore(devices)
 
-    if args.repl:
-        await repl(devices)
+    if args.console:
+        await console(devices)
 
 
 if __name__ == '__main__':
