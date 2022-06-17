@@ -3,7 +3,7 @@ import base64
 import io
 import json
 from argparse import ArgumentParser
-from ipaddress import IPv4Network, IPv4Address
+from ipaddress import IPv4Network
 from typing import Any, Tuple, List, Optional
 from urllib.parse import urlencode
 
