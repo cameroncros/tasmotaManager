@@ -1,13 +1,12 @@
-import asyncio
 import base64
 import io
 import json
-from argparse import ArgumentParser
+from cmd import Cmd
+from concurrent.futures import ThreadPoolExecutor
 from ipaddress import IPv4Network
 from typing import Any, Tuple, List, Optional
 from urllib.parse import urlencode
 
-import aiohttp as aiohttp
 import requests
 
 
@@ -19,30 +18,40 @@ class Device:
     def __eq__(self, other):
         return self.address == other.address
 
-    async def send_command(self, command: str) -> Tuple[str, Any]:
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(5)) as session:
-            args = {'cmnd': command}
-            url = f'http://{self.address}:80/cm?{urlencode(args)}'
-            try:
-                resp = await session.request('GET', url=url)
-                json = await resp.json()
-                return self.address, json
-            except Exception as e:
-                return self.address, None
+    def __str__(self):
+        return f'({self.address})'
 
-    async def backup(self) -> bool:
+    def __eq__(self, other):
+        if not isinstance(other, Device):
+            # don't attempt to compare against unrelated types
+            return NotImplemented
+        return self.address == other.address
 
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(5)) as session:
-            url = f'http://{self.address}:80/dl'
-            try:
-                resp = await session.request('GET', url=url)
-                config = await resp.read()
-                self.data = {'config': base64.b64encode(config).decode('utf-8')}
-                return True
-            except Exception as e:
-                return False
+    def __hash__(self):
+        # necessary for instances to behave sanely in dicts and sets.
+        return hash((self.address,))
 
-    async def restore(self) -> bool:
+    def send_command(self, command: str) -> Tuple["Device", Any]:
+        args = {'cmnd': command}
+        url = f'http://{self.address}:80/cm?{urlencode(args)}'
+        try:
+            resp = requests.get(url=url, timeout=5)
+            json = resp.json()
+            return self, json
+        except Exception as e:
+            return self, None
+
+    def backup(self) -> bool:
+        url = f'http://{self.address}:80/dl'
+        try:
+            resp = requests.get(url=url)
+            config = resp.raw()
+            self.data = {'config': base64.b64encode(config).decode('utf-8')}
+            return True
+        except Exception as e:
+            return False
+
+    def restore(self) -> bool:
         if not self.data['config']:
             return False
         try:
@@ -68,107 +77,92 @@ class Device:
         return self.data
 
 
-async def scan_address(address) -> Optional[Device]:
-    device = Device(address, {})
-    _, response = await device.send_command('Status 2')
-    if response is not None and 'tasmota' in response['StatusFWR']['Version']:
-        print(f'Found device: {address}')
-        return device
-    return None
+class CommandParser(Cmd):
+    prompt = '> '
 
+    def __init__(self):
+        super().__init__()
+        self.devices: List[Device] = []
+        self.do_load()
 
-async def scan_devices(network: str) -> List[Optional[Device]]:
-    net_address = IPv4Network(network)
-    scans = []
-    for address in net_address:
-        scans.append(scan_address(address))
-    results = await asyncio.gather(*scans)
-    return results
+    @staticmethod
+    def scan_address(address) -> Optional[Device]:
+        device = Device(address, {})
+        _, response = device.send_command('Status 2')
+        if response is not None and 'tasmota' in response['StatusFWR']['Version']:
+            print(f'Found device: {address}')
+            return device
+        return None
 
-
-def load_devices(config_file) -> List[Device]:
-    devices = []
-    try:
-        with open(config_file, 'r') as f:
-            config = json.load(f)
-            for address in config:
-                devices.append(Device(address, data=config[address]))
-    except:
-        pass
-    return devices
-
-
-def save_devices(config_file: str, devices: List[Device]):
-    config = {}
-    for device in devices:
-        config[str(device.address)] = device.get_config()
-    with open(config_file, 'w') as f:
-        json.dump(config, f, ensure_ascii=False, indent=4)
-
-
-async def console(devices: List[Device]):
-    while True:
-        command = input('> ')
-        results = []
-        for device in devices:
-            results.append(device.send_command(command))
-        results = await asyncio.gather(*results)
+    def do_scan(self, address_range: str):
+        net_address = IPv4Network(address_range)
+        with ThreadPoolExecutor(max_workers=1024) as executor:
+            scans = []
+            for address in net_address:
+                scans.append(executor.submit(self.scan_address, address))
+            results = [scan.result() for scan in scans]
         for result in results:
-            print(f"{result[0]}: {result[1]}")
-        print(f"\n")
+            if result is not None and result not in self.devices:
+                self.devices.append(result)
+
+    def do_cmd(self, line):
+        with ThreadPoolExecutor(max_workers=len(self.devices) + 1) as executor:
+            threads = []
+            for device in self.devices:
+                threads.append(executor.submit(device.send_command, line))
+            results = [thread.result() for thread in threads]
+            for result in results:
+                print(f"{result[0]}: {result[1]}")
+            print(f"\n")
+
+    def default(self, line):
+        self.do_cmd(line)
+
+    def do_save(self, file="devices.json"):
+        config = {}
+        for device in self.devices:
+            config[str(device.address)] = device.get_config()
+        with open(file, 'w') as f:
+            json.dump(config, f, ensure_ascii=False, indent=4)
+
+    def do_load(self, file="devices.json"):
+        try:
+            with open(file, 'r') as f:
+                config = json.load(f)
+                for address in config:
+                    self.devices.append(Device(address, data=config[address]))
+        except:
+            pass
+
+    def do_print(self, _):
+        for device in self.devices:
+            print(device)
+
+    def do_backup(self, _):
+        with ThreadPoolExecutor(max_workers=len(self.devices) + 1) as executor:
+            threads = []
+            for device in self.devices:
+                threads.append(executor.submit(device.backup))
+            results = [thread.results() for thread in threads]
+            print(results)
+
+    def do_restore(self, _):
+        with ThreadPoolExecutor(max_workers=len(self.devices) + 1) as executor:
+            threads = []
+            for device in self.devices:
+                threads.append(executor.submit(device.restore))
+            results = [thread.results() for thread in threads]
+            print(results)
+
+    def do_quit(self, _):
+        self.close()
+        return True
 
 
-async def restore(devices: List[Device]):
-    scans = []
-    for device in devices:
-        scans.append(device.restore())
-    results = await asyncio.gather(*scans)
-    print(results)
-
-
-async def backup(devices: List[Device]):
-    print("Backing up:")
-    scans = []
-    for device in devices:
-        scans.append(device.backup())
-    results = await asyncio.gather(*scans)
-    print(results)
-
-
-async def main():
-    parser = ArgumentParser()
-    parser.add_argument("--scan", help="Scan a network to look for tasmota devices on.", required=False)
-    parser.add_argument("--config", help="The config to look up tasmota devices.", required=False,
-                        default="devices.json")
-    parser.add_argument("--console", help="Run a console", required=False, action='store_true')
-    parser.add_argument("--backup", help="Backup devices", required=False, action='store_true')
-    parser.add_argument("--restore", help="Restore devices", required=False, action='store_true')
-    args = parser.parse_args()
-
-    devices = load_devices(args.config)
-    for device in devices:
-        print(f'Loaded device: {device.address}')
-
-    if args.scan:
-        print(f'Scanning: {args.scan}')
-        new_devices = await scan_devices(args.scan)
-        for device in new_devices:
-            if device is None:
-                continue
-            if device not in devices:
-                devices.append(device)
-        save_devices(args.config, devices)
-
-    if args.backup:
-        await backup(devices)
-        save_devices(args.config, devices)
-
-    if args.restore:
-        await restore(devices)
-
-    if args.console:
-        await console(devices)
+def main():
+    parser = CommandParser()
+    parser.cmdloop()
 
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    main()
