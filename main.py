@@ -15,9 +15,6 @@ class Device:
         self.address = str(address)
         self.data = data
 
-    def __eq__(self, other):
-        return self.address == other.address
-
     def __str__(self):
         return f'({self.address})'
 
@@ -95,6 +92,10 @@ class CommandParser(Cmd):
         return None
 
     def do_scan(self, address_range: str):
+        """
+        Scan an address range for devices.
+        :param address_range: The address range to scan
+        """
         net_address = IPv4Network(address_range)
         with ThreadPoolExecutor(max_workers=1024) as executor:
             scans = []
@@ -106,6 +107,10 @@ class CommandParser(Cmd):
                 self.devices.append(result)
 
     def do_cmd(self, line):
+        """
+        Execute a command on all devices
+        :arg line: Command to send
+        """
         with ThreadPoolExecutor(max_workers=len(self.devices) + 1) as executor:
             threads = []
             for device in self.devices:
@@ -119,6 +124,10 @@ class CommandParser(Cmd):
         self.do_cmd(line)
 
     def do_save(self, file="devices.json"):
+        """
+        Save devices to file
+        :param file: Default file is devices.json
+        """
         config = {}
         for device in self.devices:
             config[str(device.address)] = device.get_config()
@@ -126,6 +135,10 @@ class CommandParser(Cmd):
             json.dump(config, f, ensure_ascii=False, indent=4)
 
     def do_load(self, file="devices.json"):
+        """
+        Load devices from file
+        :param file: The file to load device config from
+        """
         try:
             with open(file, 'r') as f:
                 config = json.load(f)
@@ -135,10 +148,16 @@ class CommandParser(Cmd):
             pass
 
     def do_print(self, _):
+        """
+        Print all devices
+        """
         for device in self.devices:
             print(device)
 
     def do_backup(self, _):
+        """
+        Backup all devices
+        """
         with ThreadPoolExecutor(max_workers=len(self.devices) + 1) as executor:
             threads = []
             for device in self.devices:
@@ -147,6 +166,9 @@ class CommandParser(Cmd):
             print(results)
 
     def do_restore(self, _):
+        """
+        Restore all devices
+        """
         with ThreadPoolExecutor(max_workers=len(self.devices) + 1) as executor:
             threads = []
             for device in self.devices:
@@ -155,7 +177,9 @@ class CommandParser(Cmd):
             print(results)
 
     def do_quit(self, _):
-        self.close()
+        """
+        Quit!
+        """
         return True
 
 
