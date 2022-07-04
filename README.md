@@ -47,3 +47,5 @@ Restore all devices.
     MqttUser
 
 Execute a command on all tasmota devices found in the scan. cmd prefix is optional.
+
+For a full list of commands, see: https://tasmota.github.io/docs/Commands/
